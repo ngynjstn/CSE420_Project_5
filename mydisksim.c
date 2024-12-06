@@ -106,10 +106,21 @@ double calc_seektime(int cylinder_start, int end_cylinder) {
 	return (((FULLSEEK / 1000.0) - (TRACKTOTRACKSEEK / 1000.0)) / CYLINDERS) * seek_distance + (TRACKTOTRACKSEEK / 1000.0); // convet millsecons to seconds
 }
 
-double calc_rotational_latency(double curr_sector_offset, double target_sector_offset) {
-	//adjust the sector offset diff it make it wrap around 
-	double sector_travel = fmod(target_sector_offset - curr_sector_offset + SECTORSPERTRACK, SECTORSPERTRACK);
-    return (sector_travel / SECTORSPERTRACK) * (60.0 / RPM);
+double calc_rotational_latency(double current_sector_offset, double target_sector_offset, double seek_time) {
+    //time it takes to travel one sector
+    double time_per_sector = 60.0 / (RPM * SECTORSPERTRACK);
+
+    //uodpdate the current sector position after the seek (i.e., move the head and update the current position)
+    double current_position_after_seek = fmod(current_sector_offset + seek_time / time_per_sector, SECTORSPERTRACK);
+ 
+    //make sure target sector offset is within the correct range
+    target_sector_offset = fmod(target_sector_offset, SECTORSPERTRACK);
+
+    //calculate the number of sectors we need to travel to get to the target offset
+    double sectors_to_travel = fmod(target_sector_offset - current_position_after_seek + SECTORSPERTRACK, SECTORSPERTRACK);
+
+    //ceturn the rotational latency (time to travel the required number of sectors)
+    return sectors_to_travel * time_per_sector;
 }
 
 double calc_transfertime(int request_size) {
@@ -140,7 +151,7 @@ void fcfs_algorithm(struct List *requests, const char *outputfile, int limit) {
 		calc_disk_param(curr->lbn, curr->request_size, &psn, &psnfinal, &cylinder, &surface, &sector_offset);
 
 		double seek_time = calc_seektime(curr_cylinder, cylinder);
-		double rotational_latency = calc_rotational_latency(curr_sector_offset, sector_offset);
+		double rotational_latency = calc_rotational_latency(curr_sector_offset, sector_offset, seek_time);
 		double transfertime = calc_transfertime(curr->request_size);
 	
 		double waiting_time = fmax(0, curr_time - curr->arrival_time);
@@ -153,7 +164,12 @@ void fcfs_algorithm(struct List *requests, const char *outputfile, int limit) {
 		
 		curr_time = finish_time;
 		curr_cylinder = cylinder;
-		curr_sector_offset = sector_offset;
+		
+		// **Update current_sector_offset after seeking**
+        double time_per_sector = 60.0 / (RPM * SECTORSPERTRACK);
+        int sectors_travelled_during_seek = seek_time / time_per_sector;  // Calculate how many sectors the head moved
+        curr_sector_offset = fmod(curr_sector_offset + sectors_travelled_during_seek, SECTORSPERTRACK); // Update the offset
+		
 		curr = curr->next;
 		count++;
 	}
@@ -215,7 +231,7 @@ void sstf_algorithm(struct List *request, const char *outputfile, int limit) {
 				&psnfinal, &psn, &cylinder, &surface, &sector_offset);
 		
 		double seek_time = calc_seektime(curr_cylinder, cylinder);
-        double rotational_latency = calc_rotational_latency(curr_sector_offset, sector_offset);
+        double rotational_latency = calc_rotational_latency(curr_sector_offset, sector_offset, seek_time);
         double transfertime = calc_transfertime(select->request_size);
 
 		double waiting_time = fmax(0, curr_time - select->arrival_time);
@@ -229,7 +245,12 @@ void sstf_algorithm(struct List *request, const char *outputfile, int limit) {
 		//update the curr state
 		curr_time = finish_time;
 		curr_cylinder = cylinder;
-		curr_sector_offset = sector_offset;
+		
+		// **Update current_sector_offset after seeking**
+        double time_per_sector = 60.0 / (RPM * SECTORSPERTRACK);
+        int sectors_travelled_during_seek = seek_time / time_per_sector;  // Calculate how many sectors the head moved
+        curr_sector_offset = fmod(curr_sector_offset + sectors_travelled_during_seek, SECTORSPERTRACK); // Update the offset
+		
 
 		//remove processed req
 		for (int i = closest_ind; i < pending_count - 1; i++) {
