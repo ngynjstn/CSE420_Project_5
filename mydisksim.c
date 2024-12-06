@@ -41,15 +41,17 @@ struct List {
 	int size; //curr size of lsit
 };
 
-struct Request *create_request(struct Request *request) {
-	struct Request *request = malloc(sizeof(struct Node));
+struct Request *create_request(double arrival_time, int lbn, int request_size) {
+	struct Request *request = malloc(sizeof(struct Request));
 	if (node == NULL) {
 		fprintf(stderr, "WHOOPS: Couldn't allocate memory for node; %s\n", strerror(errno));
 		exit(-1);
 	}
-	node->request = request;
-	node->next = NULL;
-	return node;
+	request->arrival_time = arrival_time;
+	request->lbn = lbn;
+	request->request_size = request_size;
+	request->next = NULL:
+	return request;
 }
 
 
@@ -64,4 +66,43 @@ struct List *create_list() {
 	return list;
 }
 
+//func to add request to list
+void request_add(struct List *list, struct Request *request) {
+	if (list->head == NULL) {
+		list->head = request;
+	} else {
+		struct Request *curr = list->head;
+		while (curr->next != NULL) {
+			curr = curr->next;
+		}
+		curr->next = request;
+	}
+	list->size++;
+}
 
+//fucn to read the input file given
+struct List *readinput(const char *inputfile) {
+	FILE *file = fopen(inputfile, "r");
+
+	struct List *list = create_list();
+	double arrival_time;
+	int lbn, request_size;
+
+	while (fscanf(file, "%lf %d %d", &arrival_time, &lbn, &request_size) == 3) {
+		struct Request *request = create_request(arrival_time, lbn, request_size);
+		request_add(list, request);
+	}
+
+	fclose(file);
+	return list;
+}
+
+//func to calc seek time
+double calc_seektime(int cylinder_start int end_cylinder) {
+	int seek_distance = abs(end_cylinder - cylinder_start);
+	if (seek_distance == 0) {
+		return 0;
+	} else {
+		return ((FULLSEEK - TRACKTOTRACKSEEK) / (double)CYLINDERS) * seek_distance + TRACKTOTRACKSEEK;
+	}
+}
