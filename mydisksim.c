@@ -208,8 +208,7 @@ void sstf_algorithm(struct List *request, const char *outputfile, int limit) {
 			&psnfinal, &psn, &cylinder, &surface, &sector_offset);
 			
 			if (pendingreq[i]->arrival_time <= curr_time || closest_ind == -1) {
-				int seek_distance = abs(curr_cylinder - cylinder);
-				
+				int seek_distance = calc_seektime(curr_cylinder, cylinder);
 				if (seek_distance < shortest_sd) {
 					shortest_sd = seek_distance;
 					closest_ind = i;
@@ -240,7 +239,7 @@ void sstf_algorithm(struct List *request, const char *outputfile, int limit) {
 		//output it 
 		fprintf(file, "%.6lf %.6lf %.6lf %d %d %d %.6lf %d\n",
                 	select->arrival_time, finish_time, waiting_time,
-                	psnfinal, cylinder, surface, sector_offset, shortest_sd);
+                	psnfinal, cylinder, surface, sector_offset, abs(curr_cylinder - cylinder));
 
 		//update the curr state
 		curr_time = finish_time;
@@ -289,4 +288,3 @@ int main(int argc, char *argv[]) {
 
     	return 0;
 }
-
