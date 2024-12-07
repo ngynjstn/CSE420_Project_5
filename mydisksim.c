@@ -17,7 +17,7 @@
 #define TRANSFERRATE 1 //in Gb/s
 
 //struct for the result of the disk req sim
-struct Result {
+struct Results {
 	double arrival_time;
 	double finish_time;
 	double waiting_time;
@@ -33,6 +33,7 @@ struct Request {
 	double arrival_time; 
 	int lbn; //logical block num
 	int request_size; 
+	int cylinder;
 	struct Request *next;
 	//struct Request *prev;
 };
@@ -98,6 +99,18 @@ struct List *readinput(const char *inputfile) {
 	fclose(file);
 	return list;
 }
+
+void destroy_list(struct List *list) {
+    struct Request *ptr = list->head;
+    struct Request *tmp;  
+    while (ptr != NULL) {
+        tmp = ptr;
+        ptr = ptr->next;
+        free(tmp); // Free each Request node
+    }
+    free(list); // Free the List structure itself
+}
+
 
 //func to calc seek time
 double calc_seektime(int cylinder_start, int end_cylinder) {
@@ -199,6 +212,8 @@ void sstf_algorithm(struct List *request, const char *outputfile, int limit) {
 	while (pending_count > 0 && process_count < limit) {
 		int closest_ind = -1; //negtaive to find the closest index
 		int shortest_sd = INT_MAX; //shoretst seek distance max
+		pendingreq[closest_ind] = NULL;
+
 
 		//find the closets request
 		for (int i = 0; i < pending_count; i++) {
@@ -245,7 +260,7 @@ void sstf_algorithm(struct List *request, const char *outputfile, int limit) {
 		curr_time = finish_time;
 		curr_cylinder = cylinder;
 		
-		// **Update current_sector_offset after seeking**
+		//uopdate current_sector_offset after seeking
         double time_per_sector = 60.0 / (RPM * SECTORSPERTRACK);
         int sectors_travelled_during_seek = seek_time / time_per_sector;  // Calculate how many sectors the head moved
         curr_sector_offset = fmod(curr_sector_offset + sectors_travelled_during_seek, SECTORSPERTRACK); // Update the offset
@@ -261,30 +276,148 @@ void sstf_algorithm(struct List *request, const char *outputfile, int limit) {
 	fclose(file);
 }
 
-int main(int argc, char *argv[]) {
-	const char *inputfile = argv[1];
-    	const char *outputfile = argv[2];
-    	const char *algorithm = argv[3];
-    	int limit = (argc == 5) ? atoi(argv[4]) : INT_MAX;
-
-	struct List *requests = readinput(inputfile);
-	
-	if (strcmp(algorithm, "fcfs") == 0) {
-        	fcfs_algorithm(requests, outputfile, limit);
-    	} else if (strcmp(algorithm, "sstf") == 0) {
-		sstf_algorithm(requests, outputfile, limit);
-	} else {
-        fprintf(stderr, "Error: Unknown algorithm %s\n", algorithm);
+//created a helpselper function to compare requests by arrival time
+int compare_requests_by_arrival_time(const void *a, const void *b) {
+    struct Request *req_a = *(struct Request **)a;
+    struct Request *req_b = *(struct Request **)b;
+    if (req_a->arrival_time < req_b->arrival_time)
         return -1;
-    	}	
+    else if (req_a->arrival_time > req_b->arrival_time)
+        return 1;
+    else
+        return 0;
+}
 
-    	struct Request *current = requests->head;
-    	while (current != NULL) {
-        	struct Request *next = current->next;
-        	free(current);
-        	current = next;
-    	}
-    	free(requests);
+void scan_algorithm(struct List *request_list, const char *outputfile, int limit) {
+    FILE *file = fopen(outputfile, "w");
 
-    	return 0;
+    struct Request *requests_array[request_list->size];
+    struct Request *curr = request_list->head;
+    int index = 0;
+
+    while (curr != NULL) {
+        requests_array[index++] = curr;
+        curr = curr->next;
+    }
+
+    //sort the requests based on arrival time
+    qsort(requests_array, request_list->size, sizeof(struct Request *), compare_requests_by_arrival_time);
+
+    double curr_time = 0;
+    int curr_cylinder = 0;  
+    double curr_sector_offset = 0;  
+    int process_count = 0;
+
+    int direction = 1;  //1 for increasing, -1 for decreasing
+
+    for (int i = 0; i < request_list->size && process_count < limit; i++) {
+        struct Request *req = requests_array[i];
+        int psnfinal, psn, cylinder, surface;
+        double sector_offset;
+        
+        //calculate the disk parameters based on the LBN and request size
+        calc_disk_param(req->lbn, req->request_size, &psn, &psnfinal, &cylinder, &surface, &sector_offset);
+
+        // If the current time is before the arrival time, fast forward to the arrival time
+        if (curr_time < req->arrival_time) {
+            curr_time = req->arrival_time;
+        }
+
+        double seek_time = calc_seektime(curr_cylinder, cylinder);
+        double rotational_latency = calc_rotational_latency(curr_sector_offset, sector_offset, seek_time);
+        double transfertime = calc_transfertime(req->request_size);
+        double waiting_time = fmax(0, curr_time - req->arrival_time);
+        double finish_time = curr_time + waiting_time + seek_time + rotational_latency + transfertime;
+
+        fprintf(file, "%.6lf %.6lf %.6lf %d %d %d %.6lf %d\n",
+                 req->arrival_time, finish_time, waiting_time, psnfinal, cylinder, surface, sector_offset, abs(curr_cylinder - cylinder));
+
+        curr_time = finish_time;
+        curr_cylinder = cylinder;
+
+        double time_per_sector = 60.0 / (RPM * SECTORSPERTRACK);
+        int sectors_travelled_during_seek = seek_time / time_per_sector;
+        curr_sector_offset = fmod(curr_sector_offset + sectors_travelled_during_seek, SECTORSPERTRACK);
+
+        //moveove head in the correct direction based on SCAN
+        if (direction == 1) {
+            curr_cylinder++;
+        } else {
+            curr_cylinder--;
+        }
+
+        //reeverse direction if at the end or beginning of the disk
+        if (curr_cylinder == CYLINDERS - 1 || curr_cylinder == 0) {
+            direction *= -1;  //erverse direction
+        }
+
+        process_count++;
+    }
+
+    fclose(file);
+
+	//WANTED TO IMPLEMENT COULDNT (WORK IN PROGRESS)
+	// double curr_time = 0;  // Keeps track of current time
+    // int curr_cylinder = 0;  // Current cylinder of the disk head
+    // double curr_sector_offset = 0;  // Current sector offset
+    // int process_count = 0;
+	// int dist = 0;
+    // int bestdist = 0;
+
+    // for (int i = 0; i < request_list->size && process_count < limit; i++) {
+    //     bestdist = INT_MAX;
+	// 	struct Request *curr = requests_array[i];
+	// 	 while(curr != NULL){
+	// 		 int psnfinal, psn, cylinder, surface;
+    //     	double sector_offset;
+        
+    //     	// Calculate the disk parameters based on the LBN and request size
+    //    	 	calc_disk_param(curr->lbn, curr->request_size, &psn, &psnfinal, &cylinder, &surface, &sector_offset);
+    //         dist = abs(curr_cylinder- cylinder);
+    //             if(dist < bestdist){
+    //                 best_req = curr;
+    //                 bestdist = dist;
+    //             }
+    //         }
+    //          best_req= curr->next;
+    //     }
+    //     dist = 0;
+    //     bestdist = INT_MAX;
+
+    
+
+    //fclose(outputFile);
+}
+
+//void clook_algorithm(struct List *request_list, const char *outputfile, int limit) {
+    //FILE *file = fopen(outputfile, "w");
+
+
+
+int main(int argc, char *argv[]) {
+    const char *inputfile = argv[1];
+    const char *outputfile = argv[2];
+    const char *algorithm = argv[3];
+    int limit = (argc == 5) ? atoi(argv[4]) : INT_MAX;
+
+    struct List *requests = readinput(inputfile);
+
+    if (strcmp(algorithm, "fcfs") == 0) {
+        fcfs_algorithm(requests, outputfile, limit);
+    } else if (strcmp(algorithm, "sstf") == 0) {
+        sstf_algorithm(requests, outputfile, limit);
+    } else if (strcmp(algorithm, "scan") == 0) {  //hanlede scan
+        scan_algorithm(requests, outputfile, limit);
+	//} else if (strcmp(algorithm, "clook") == 0) {  //hanlede scan
+        //clook_algorithm(requests, outputfile, limit);
+    } else {
+        fprintf(stderr, "Error: Unknown algorithm %s\n", algorithm);
+        destroy_list(requests);
+		return -1;
+    }
+
+    //cleanup memroy
+	destroy_list(requests);
+
+    return 0;
 }
